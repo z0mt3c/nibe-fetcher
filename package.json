@@ -1,0 +1,17 @@
+{
+  "name": "nibe-fetcher",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Timo Behrmann",
+  "license": "MIT",
+  "description": "",
+  "dependencies": {
+    "async": "^2.1.4",
+    "configstore": "^2.1.0",
+    "prompt": "^1.0.0",
+    "wreck": "^10.0.0"
+  }
+}
