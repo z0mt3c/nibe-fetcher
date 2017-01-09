@@ -1,19 +1,22 @@
 const EventEmitter = require('events')
 const Hoek = require('hoek')
 const Wreck = require('wreck')
+const Joi = require('joi')
 const querystring = require('querystring')
 const prompt = require('prompt')
 const Configstore = require('configstore')
 const conf = new Configstore('nibe-fetcher', {foo: 'bar'})
 const async = require('async')
+const CronJob = require('cron').CronJob
+
 
 const defaultOptions = {
   pattern: /<tr>\s*<td>\s*([^<]+)<span[^>]+>([^<]*)<\/span>\s*<\/td>\s*<td>\s*<span class="AutoUpdateValue ID([0-9]*)[^>]+>([^<]*)<\/span>\s*<\/td>\s*<\/tr>/g,
   baseUrl: 'https://api.nibeuplink.com',
   clientId: null,
   clientSecret: null,
-  redirectUri: null,
   systemId: null,
+  redirectUri: 'http://z0mt3c.github.io/nibe.html',
   scope: 'READSYSTEM',
   autoStart: true,
   timeout: 60000,
@@ -69,12 +72,22 @@ const defaultOptions = {
     '47411': 'aux_in_out_aux_5',
     '47412': 'aux_in_out_x',
     '48745': 'system_info_country'
-  }
+  },
+  interval: 60,
+  cronExpression: '0 * * * * *',
+  timezone: 'Europe/Berlin'
 }
 
 class Fetcher extends EventEmitter {
   constructor (options) {
     super()
+
+    Joi.assert(options, Joi.object({
+      clientId: Joi.string().length(32).required(),
+      clientSecret: Joi.string().required(),
+      systemId: Joi.number().required()
+    }).options({ allowUnknown: true }))
+
     this.options = Hoek.applyToDefaults(defaultOptions, options || {})
 
     this.wreck = Wreck.defaults({
@@ -88,9 +101,54 @@ class Fetcher extends EventEmitter {
     if (this.options.autoStart) this.start()
   }
 
-  start () {}
+  fetch () {
+    async.waterfall([
+      (callback) => {
+        if (conf.get('expiresAt') > Date.now()) return callback()
+        console.log('Token is expired / expires soon - refreshing')
+        this.refreshAuthentication().then(() => callback(null), (error) => callback(error))
+      },
+      (callback) => {
+        if (this.categories != null) return callback()
+        console.log('Loading categories')
+        this.fetchCategories().then((data) => callback(null, data), callback)
+      },
+      (callback) => {
+        this.fetchAllCategories().then((data) => this._onData(data), (error) => this._onError(error))
+      }
+    ])
+  }
 
-  stop () {}
+  start () {
+    if (this._cron) return
+
+    async.waterfall([
+      (callback) => {
+        if (this.hasRefreshToken()) return callback()
+        this.auth()
+          .then((code) => {
+            this.token(code)
+              .then((data) => callback(null, data), callback)
+          })
+      },
+      (callback) => {
+        if (conf.get('expiresAt') > Date.now()) return callback()
+        console.log('Token is expired / expires soon - refreshing')
+        this.refreshAuthentication().then(() => callback(null), (error) => callback(error))
+      },
+      (callback) => {
+        this._cron = new CronJob(this.options.cronExpression, () => { this.fetch() }, () => callback(), true, this.options.timezone)
+      }
+    ], (error, result) => {
+      console.log(error, result)
+    })
+  }
+
+  stop () {
+    if (!this._cron) return
+    this._cron.stop()
+    this._cron = null
+  }
 
   auth () {
     const query = {
@@ -102,6 +160,14 @@ class Fetcher extends EventEmitter {
     }
 
     console.log('Open in webbrowser:', this.options.baseUrl + '/oauth/authorize?' + querystring.stringify(query))
+
+    return new Promise((resolve, reject) => {
+      prompt.start()
+      prompt.get(['code'], (error, result) => {
+        if (error) return reject(error)
+        return resolve(result.code)
+      })
+    })
   }
 
   token (code) {
@@ -124,22 +190,14 @@ class Fetcher extends EventEmitter {
       }, (error, response, payload) => {
         if (error) return reject(error)
         if (response.statusCode === 401) return reject(new Error(response.statusCode + ': ' + response.statusMessage))
+        payload.expiresAt = Date.now() + payload.expires_in * 1000 - 5 * 60 * 1000
         conf.set(payload)
         return resolve(payload)
       })
     })
   }
 
-  setup () {
-    this.auth()
-    prompt.start()
-    prompt.get(['code'], (error, result) => {
-      if (error) throw error
-      this.token(result.code)
-    })
-  }
-
-  refresh () {
+  refreshAuthentication () {
     const data = {
       grant_type: 'refresh_token',
       refresh_token: conf.get('refresh_token'),
@@ -157,6 +215,7 @@ class Fetcher extends EventEmitter {
       }, (error, response, payload) => {
         if (error) return reject(error)
         if (response.statusCode === 401) return reject(new Error(response.statusCode + ': ' + response.statusMessage))
+        payload.expiresAt = Date.now() + payload.expires_in * 1000 - 5 * 60 * 1000
         conf.set(payload)
         return resolve(payload)
       })
@@ -174,7 +233,7 @@ class Fetcher extends EventEmitter {
       }, (error, response, payload) => {
         if (error) return reject(error)
         if (response.statusCode === 401) return reject(new Error(response.statusCode + ': ' + response.statusMessage))
-        conf.set('categories', payload)
+        this.categories = payload
         return resolve(payload)
       })
     })
@@ -197,13 +256,13 @@ class Fetcher extends EventEmitter {
   }
 
   fetchAllCategories () {
-    const categories = conf.get('categories')
+    const categories = this.categories
 
     return new Promise((resolve, reject) => {
       async.mapSeries(categories, (item, reply) => {
         this.fetchCategory(item.categoryId).then((result) => {
           result.forEach((i) => {
-            i.key = (item.categoryId + '_' + i.title.split(/[^a-z]+/gi).join('_')).toLowerCase().replace(/[_]+$/, '')
+            i.key = this.options.parameters[i.name] || (item.categoryId + '_' + i.title.split(/[^a-z]+/gi).join('_')).toLowerCase().replace(/[_]+$/, '')
             i.categoryId = item.categoryId
           })
           reply(null, result)
