@@ -5,24 +5,22 @@ const Joi = require('joi')
 const querystring = require('querystring')
 const prompt = require('prompt')
 const Configstore = require('configstore')
-const conf = new Configstore('nibe-fetcher', {foo: 'bar'})
 const async = require('async')
-const CronJob = require('cron').CronJob
-
+const info = require('./package.json')
 
 const defaultOptions = {
-  pattern: /<tr>\s*<td>\s*([^<]+)<span[^>]+>([^<]*)<\/span>\s*<\/td>\s*<td>\s*<span class="AutoUpdateValue ID([0-9]*)[^>]+>([^<]*)<\/span>\s*<\/td>\s*<\/tr>/g,
-  baseUrl: 'https://api.nibeuplink.com',
   clientId: null,
   clientSecret: null,
   systemId: null,
+  pattern: /<tr>\s*<td>\s*([^<]+)<span[^>]+>([^<]*)<\/span>\s*<\/td>\s*<td>\s*<span class="AutoUpdateValue ID([0-9]*)[^>]+>([^<]*)<\/span>\s*<\/td>\s*<\/tr>/g,
+  baseUrl: 'https://api.nibeuplink.com',
   redirectUri: 'http://z0mt3c.github.io/nibe.html',
   scope: 'READSYSTEM',
   autoStart: true,
   timeout: 60000,
   maxBytes: 1048576,
   followRedirects: 2,
-  userAgent: 'nibe-fetcher 1.0',
+  userAgent: [info.name, info.version].join(' '),
   parameters: {
     '10001': 'ventilation_fan_speed',
     '10012': 'cpr_info_ep14_blocked',
@@ -73,9 +71,9 @@ const defaultOptions = {
     '47412': 'aux_in_out_x',
     '48745': 'system_info_country'
   },
-  interval: 60,
-  cronExpression: '0 * * * * *',
-  timezone: 'Europe/Berlin'
+  interval: 15,
+  timezone: 'Europe/Berlin',
+  renewBeforeExpiry: 5 * 60 * 1000
 }
 
 class Fetcher extends EventEmitter {
@@ -89,6 +87,7 @@ class Fetcher extends EventEmitter {
     }).options({ allowUnknown: true }))
 
     this.options = Hoek.applyToDefaults(defaultOptions, options || {})
+    this.config = new Configstore(['nibe-fetcher', options.clientId, options.systemId].join('_'), {})
 
     this.wreck = Wreck.defaults({
       baseUrl: this.options.baseUrl,
@@ -101,53 +100,69 @@ class Fetcher extends EventEmitter {
     if (this.options.autoStart) this.start()
   }
 
-  fetch () {
+  fetch (callback) {
     async.waterfall([
       (callback) => {
-        if (conf.get('expiresAt') > Date.now()) return callback()
+        if (this._hasRefreshToken()) return callback()
+        this.auth()
+          .then((code) => {
+            this.token(code)
+              .then((data) => callback(), (error) => callback(error))
+          })
+      },
+      (callback) => {
+        if (!this._isTokenExpired()) return callback()
         console.log('Token is expired / expires soon - refreshing')
-        this.refreshAuthentication().then(() => callback(null), (error) => callback(error))
+        this.refreshToken().then((data) => callback(), (error) => callback(error))
       },
       (callback) => {
         if (this.categories != null) return callback()
         console.log('Loading categories')
-        this.fetchCategories().then((data) => callback(null, data), callback)
+        this.fetchCategories().then((data) => {
+          callback()
+        }, (error) => {
+          callback(error)
+        })
       },
       (callback) => {
-        this.fetchAllCategories().then((data) => this._onData(data), (error) => this._onError(error))
+        this.fetchAllParams().then((data) => {
+          callback()
+        }, (error) => {
+          callback(error)
+        })
       }
-    ])
-  }
-
-  start () {
-    if (this._cron) return
-
-    async.waterfall([
-      (callback) => {
-        if (this.hasRefreshToken()) return callback()
-        this.auth()
-          .then((code) => {
-            this.token(code)
-              .then((data) => callback(null, data), callback)
-          })
-      },
-      (callback) => {
-        if (conf.get('expiresAt') > Date.now()) return callback()
-        console.log('Token is expired / expires soon - refreshing')
-        this.refreshAuthentication().then(() => callback(null), (error) => callback(error))
-      },
-      (callback) => {
-        this._cron = new CronJob(this.options.cronExpression, () => { this.fetch() }, () => callback(), true, this.options.timezone)
+    ], (error) => {
+      if (error) {
+        this._onError(error)
       }
-    ], (error, result) => {
-      console.log(error, result)
+      callback()
     })
   }
 
+  start () {
+    if (this._interval) return
+    var active = false
+
+    var exec = () => {
+      if (active) return
+      active = true
+      this.fetch(() => {
+        active = false
+      })
+    }
+
+    this._interval = setInterval(exec, this.options.interval * 1000)
+    exec()
+  }
+
   stop () {
-    if (!this._cron) return
-    this._cron.stop()
-    this._cron = null
+    if (!this._interval) return
+    clearInterval(this._interval)
+    this._interval = null
+  }
+
+  clear () {
+    this.config.clear()
   }
 
   auth () {
@@ -165,6 +180,7 @@ class Fetcher extends EventEmitter {
       prompt.start()
       prompt.get(['code'], (error, result) => {
         if (error) return reject(error)
+        prompt.stop()
         return resolve(result.code)
       })
     })
@@ -189,18 +205,18 @@ class Fetcher extends EventEmitter {
         payload: querystring.stringify(data)
       }, (error, response, payload) => {
         if (error) return reject(error)
-        if (response.statusCode === 401) return reject(new Error(response.statusCode + ': ' + response.statusMessage))
-        payload.expiresAt = Date.now() + payload.expires_in * 1000 - 5 * 60 * 1000
-        conf.set(payload)
+        if (this._isError(response)) return reject(new Error(response.statusCode + ': ' + response.statusMessage))
+        payload.expires_at = Date.now() + (payload.expires_in * 1000)
+        this.config.set(payload)
         return resolve(payload)
       })
     })
   }
 
-  refreshAuthentication () {
+  refreshToken () {
     const data = {
       grant_type: 'refresh_token',
-      refresh_token: conf.get('refresh_token'),
+      refresh_token: this.config.get('refresh_token'),
       client_id: this.options.clientId,
       client_secret: this.options.clientSecret
     }
@@ -214,9 +230,9 @@ class Fetcher extends EventEmitter {
         payload: querystring.stringify(data)
       }, (error, response, payload) => {
         if (error) return reject(error)
-        if (response.statusCode === 401) return reject(new Error(response.statusCode + ': ' + response.statusMessage))
-        payload.expiresAt = Date.now() + payload.expires_in * 1000 - 5 * 60 * 1000
-        conf.set(payload)
+        if (this._isError(response)) return reject(new Error(response.statusCode + ': ' + response.statusMessage))
+        payload.expires_at = Date.now() + (payload.expires_in * 1000)
+        this.config.set(payload)
         return resolve(payload)
       })
     })
@@ -227,61 +243,63 @@ class Fetcher extends EventEmitter {
     return new Promise((resolve, reject) => {
       this.wreck.get(`/api/v1/systems/${systemId}/serviceinfo/categories`, {
         headers: {
-          Authorization: 'Bearer ' + conf.get('access_token')
+          Authorization: 'Bearer ' + this.config.get('access_token')
         },
         json: true
       }, (error, response, payload) => {
         if (error) return reject(error)
-        if (response.statusCode === 401) return reject(new Error(response.statusCode + ': ' + response.statusMessage))
+        if (this._isError(response)) return reject(new Error(response.statusCode + ': ' + response.statusMessage))
         this.categories = payload
         return resolve(payload)
       })
     })
   }
 
-  fetchCategory (category) {
+  fetchParams (category) {
     const systemId = this.options.systemId
     return new Promise((resolve, reject) => {
       this.wreck.get(`/api/v1/systems/${systemId}/serviceinfo/categories/status?categoryId=${category}`, {
         headers: {
-          Authorization: 'Bearer ' + conf.get('access_token')
+          Authorization: 'Bearer ' + this.config.get('access_token')
         },
         json: true
       }, (error, response, payload) => {
         if (error) return reject(error)
-        if (response.statusCode === 401) return reject(new Error(response.statusCode + ': ' + response.statusMessage))
+        if (this._isError(response)) return reject(new Error(response.statusCode + ': ' + response.statusMessage))
         return resolve(payload)
       })
     })
   }
 
-  fetchAllCategories () {
+  fetchAllParams () {
     const categories = this.categories
-
     return new Promise((resolve, reject) => {
-      async.mapSeries(categories, (item, reply) => {
-        this.fetchCategory(item.categoryId).then((result) => {
+      async.map(categories, (item, reply) => {
+        this.fetchParams(item.categoryId).then((result) => {
           result.forEach((i) => {
-            i.key = this.options.parameters[i.name] || (item.categoryId + '_' + i.title.split(/[^a-z]+/gi).join('_')).toLowerCase().replace(/[_]+$/, '')
+            const name = i.parameterId || (item.categoryId + '_' + i.title.split(/[^a-z]+/gi).join('_')).toLowerCase().replace(/[_]+$/, '')
+            i.key = this.options.parameters[name] || name
             i.categoryId = item.categoryId
           })
           reply(null, result)
         }, (error) => {
-          reply(error, null)
+          reply(error)
         })
       }, (error, results) => {
         if (error) return reject(error)
-        resolve([].concat.apply([], results))
+        results = [].concat.apply([], results)
+        this._onData(results)
+        resolve(results)
       })
     })
   }
 
-  hasCategories () {
-    return !!conf.get('categories')
+  _isTokenExpired () {
+    return (this.config.get('expires_at') || 0) < (Date.now() + this.renewBeforeExpiry)
   }
 
-  hasRefreshToken () {
-    return !!conf.get('refresh_token')
+  _hasRefreshToken () {
+    return !!this.config.get('refresh_token')
   }
 
   _onData (data) {
@@ -290,6 +308,16 @@ class Fetcher extends EventEmitter {
 
   _onError (error) {
     this.emit('error', error)
+  }
+
+  _isError (response) {
+    if (response.statusCode !== 200) {
+      console.error('Error occurred: ' + response.statusCode + ': ' + response.statusMessage)
+      this.clear()
+      return true
+    }
+
+    return false
   }
 }
 
