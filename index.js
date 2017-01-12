@@ -104,6 +104,11 @@ class Fetcher extends EventEmitter {
     async.waterfall([
       (callback) => {
         if (this._hasRefreshToken()) return callback()
+        if (this.options.code) {
+          this.token(this.options.code)
+              .then((data) => callback(), (error) => callback(error))
+          return
+        }
         this.auth()
           .then((code) => {
             this.token(code)
