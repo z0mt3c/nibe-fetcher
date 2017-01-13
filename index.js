@@ -212,7 +212,7 @@ const defaultOptions = {
       'key': 'system_info_country'
     }
   },
-  interval: 15,
+  interval: 60,
   timezone: 'Europe/Berlin',
   renewBeforeExpiry: 5 * 60 * 1000,
   sessionStore: Path.join(__dirname, './.session.json')
@@ -412,7 +412,7 @@ class Fetcher extends EventEmitter {
   fetchAllParams () {
     const categories = this.categories
     return new Promise((resolve, reject) => {
-      async.map(categories, (item, reply) => {
+      async.mapSeries(categories, (item, reply) => {
         this.fetchParams(item.categoryId).then((result) => {
           result.forEach((i) => {
             const name = i.parameterId || (item.categoryId + '_' + i.title.split(/[^a-z]+/gi).join('_')).toLowerCase().replace(/[_]+$/, '')
