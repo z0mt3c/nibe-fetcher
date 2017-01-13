@@ -10,10 +10,9 @@
   "description": "",
   "dependencies": {
     "async": "^2.1.4",
-    "configstore": "^2.1.0",
     "hoek": "^4.1.0",
     "joi": "^10.1.0",
-    "prompt": "^1.0.0",
+    "jsonfile": "^2.4.0",
     "wreck": "^10.0.0"
   }
 }

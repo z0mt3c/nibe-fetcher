@@ -3,10 +3,12 @@ const Hoek = require('hoek')
 const Wreck = require('wreck')
 const Joi = require('joi')
 const querystring = require('querystring')
-const prompt = require('prompt')
-const Configstore = require('configstore')
 const async = require('async')
 const info = require('./package.json')
+const jsonfile = require('jsonfile')
+jsonfile.spaces = 2
+const Path = require('path')
+const fs = require('fs')
 
 const defaultOptions = {
   clientId: null,
@@ -22,58 +24,198 @@ const defaultOptions = {
   followRedirects: 2,
   userAgent: [info.name, info.version].join(' '),
   parameters: {
-    '10001': 'ventilation_fan_speed',
-    '10012': 'cpr_info_ep14_blocked',
-    '10033': 'addition_blocked',
-    '40004': 'status_outdoor_temp',
-    '40008': 'system_1_heat_medium_flow',
-    '40012': 'cpr_info_ep14_condenser_return',
-    '40013': 'status_hot_water_top',
-    '40014': 'status_hot_water_charging',
-    '40017': 'cpr_info_ep14_condenser_out',
-    '40018': 'cpr_info_ep14_hot_gas',
-    '40019': 'cpr_info_ep14_liquid_line',
-    '40020': 'cpr_info_ep14_evaporator',
-    '40022': 'cpr_info_ep14_suction_gas',
-    '40025': 'ventilation_exhaust_air',
-    '40026': 'ventilation_extract_air',
-    '40033': 'system_1_room_temperature',
-    '40067': 'status_avg_outdoor_temp',
-    '40071': 'system_1_external_flow_temp',
-    '40072': 'heat_meter_flow',
-    '40101': 'outdoor_air_mix_incoming_air_temp',
-    '40919': 'outdoor_air_mix_status',
-    '41026': 'defrosting_value_air_velocity_sensor',
-    '43005': 'status_degree_minutes',
-    '43009': 'system_1_calculated_flow_temp',
-    '43081': 'addition_time_factor',
-    '43084': 'addition_electrical_addition_power',
-    '43123': 'cpr_info_ep14_allowed_compr_freq',
-    '43124': 'defrosting_reference_air_velocity_sensor',
-    '43125': 'defrosting_decrease_from_reference',
-    '43136': 'cpr_info_ep14_current_compr_frequency',
-    '43161': 'system_1_external_adjustment',
-    '43416': 'cpr_info_ep14_compressor_starts',
-    '43420': 'cpr_info_ep14_compressor_operating_time',
-    '43424': 'cpr_info_ep14_compressor_operating_time_hot_water',
-    '43437': 'cpr_info_ep14_pump_speed_heating_medium',
-    '44298': 'heat_meter_hw_incl_int_add',
-    '44300': 'heat_meter_heating_int_add_incl',
-    '44306': 'heat_meter_hotwater_compr_only',
-    '44308': 'heat_meter_heating_compr_only',
-    '47212': 'addition_set_max_electrical_add',
-    '47214': 'addition_fuse_size',
-    '47407': 'aux_in_out_aux_1',
-    '47408': 'aux_in_out_aux_2',
-    '47409': 'aux_in_out_aux_3',
-    '47410': 'aux_in_out_aux_4',
-    '47411': 'aux_in_out_aux_5',
-    '47412': 'aux_in_out_x',
-    '48745': 'system_info_country'
+    '10001': {
+      'key': 'ventilation_fan_speed',
+      'divideBy': 0
+    },
+    '10012': {
+      'key': 'cpr_info_ep14_blocked',
+      'divideBy': 0
+    },
+    '10033': {
+      'key': 'addition_blocked',
+      'divideBy': 0
+    },
+    '40004': {
+      'key': 'status_outdoor_temp',
+      'divideBy': 10
+    },
+    '40008': {
+      'key': 'system_1_heat_medium_flow',
+      'divideBy': 10
+    },
+    '40012': {
+      'key': 'cpr_info_ep14_condenser_return',
+      'divideBy': 10
+    },
+    '40013': {
+      'key': 'status_hot_water_top',
+      'divideBy': 10
+    },
+    '40014': {
+      'key': 'status_hot_water_charging',
+      'divideBy': 10
+    },
+    '40017': {
+      'key': 'cpr_info_ep14_condenser_out',
+      'divideBy': 10
+    },
+    '40018': {
+      'key': 'cpr_info_ep14_hot_gas',
+      'divideBy': 10
+    },
+    '40019': {
+      'key': 'cpr_info_ep14_liquid_line',
+      'divideBy': 10
+    },
+    '40020': {
+      'key': 'cpr_info_ep14_evaporator',
+      'divideBy': 10
+    },
+    '40022': {
+      'key': 'cpr_info_ep14_suction_gas',
+      'divideBy': 10
+    },
+    '40025': {
+      'key': 'ventilation_exhaust_air',
+      'divideBy': 10
+    },
+    '40026': {
+      'key': 'ventilation_extract_air',
+      'divideBy': 10
+    },
+    '40033': {
+      'key': 'system_1_room_temperature',
+      'divideBy': 10
+    },
+    '40067': {
+      'key': 'status_avg_outdoor_temp',
+      'divideBy': 10
+    },
+    '40071': {
+      'key': 'system_1_external_flow_temp'
+    },
+    '40072': {
+      'key': 'heat_meter_flow',
+      'divideBy': 10
+    },
+    '40101': {
+      'key': 'outdoor_air_mix_incoming_air_temp',
+      'divideBy': 10
+    },
+    '40919': {
+      'key': 'outdoor_air_mix_status',
+      'divideBy': 0
+    },
+    '41026': {
+      'key': 'defrosting_value_air_velocity_sensor',
+      'divideBy': 10
+    },
+    '43005': {
+      'key': 'status_degree_minutes',
+      'divideBy': 10
+    },
+    '43009': {
+      'key': 'system_1_calculated_flow_temp',
+      'divideBy': 10
+    },
+    '43081': {
+      'key': 'addition_time_factor',
+      'divideBy': 10
+    },
+    '43084': {
+      'key': 'addition_electrical_addition_power',
+      'divideBy': 10
+    },
+    '43123': {
+      'key': 'cpr_info_ep14_allowed_compr_freq',
+      'divideBy': 0
+    },
+    '43124': {
+      'key': 'defrosting_reference_air_velocity_sensor',
+      'divideBy': 10
+    },
+    '43125': {
+      'key': 'defrosting_decrease_from_reference',
+      'divideBy': 10
+    },
+    '43136': {
+      'key': 'cpr_info_ep14_current_compr_frequency',
+      'divideBy': 10
+    },
+    '43161': {
+      'key': 'system_1_external_adjustment',
+      'divideBy': 0
+    },
+    '43416': {
+      'key': 'cpr_info_ep14_compressor_starts',
+      'divideBy': 0
+    },
+    '43420': {
+      'key': 'cpr_info_ep14_compressor_operating_time',
+      'divideBy': 0
+    },
+    '43424': {
+      'key': 'cpr_info_ep14_compressor_operating_time_hot_water',
+      'divideBy': 0
+    },
+    '43437': {
+      'key': 'cpr_info_ep14_pump_speed_heating_medium',
+      'divideBy': 0
+    },
+    '44298': {
+      'key': 'heat_meter_hw_incl_int_add',
+      'divideBy': 10
+    },
+    '44300': {
+      'key': 'heat_meter_heating_int_add_incl',
+      'divideBy': 10
+    },
+    '44306': {
+      'key': 'heat_meter_hotwater_compr_only',
+      'divideBy': 10
+    },
+    '44308': {
+      'key': 'heat_meter_heating_compr_only',
+      'divideBy': 10
+    },
+    '47212': {
+      'key': 'addition_set_max_electrical_add',
+      'divideBy': 100
+    },
+    '47214': {
+      'key': 'addition_fuse_size'
+    },
+    '47407': {
+      'key': 'aux_in_out_aux_1',
+      'divideBy': 0
+    },
+    '47408': {
+      'key': 'aux_in_out_aux_2'
+    },
+    '47409': {
+      'key': 'aux_in_out_aux_3'
+    },
+    '47410': {
+      'key': 'aux_in_out_aux_4',
+      'divideBy': 0
+    },
+    '47411': {
+      'key': 'aux_in_out_aux_5',
+      'divideBy': 0
+    },
+    '47412': {
+      'key': 'aux_in_out_x',
+      'divideBy': 0
+    },
+    '48745': {
+      'key': 'system_info_country'
+    }
   },
   interval: 15,
   timezone: 'Europe/Berlin',
-  renewBeforeExpiry: 5 * 60 * 1000
+  renewBeforeExpiry: 5 * 60 * 1000,
+  sessionStore: Path.join(__dirname, './.session.json')
 }
 
 class Fetcher extends EventEmitter {
@@ -87,7 +229,6 @@ class Fetcher extends EventEmitter {
     }).options({ allowUnknown: true }))
 
     this.options = Hoek.applyToDefaults(defaultOptions, options || {})
-    this.config = new Configstore(['nibe-fetcher', options.clientId, options.systemId].join('_'), {})
 
     this.wreck = Wreck.defaults({
       baseUrl: this.options.baseUrl,
@@ -97,6 +238,7 @@ class Fetcher extends EventEmitter {
       maxBytes: this.options.maxBytes
     })
 
+    if (process.env.NIBE_AUTH_CODE) this.options.authCode = process.env.NIBE_AUTH_CODE
     if (this.options.autoStart) this.start()
   }
 
@@ -104,16 +246,26 @@ class Fetcher extends EventEmitter {
     async.waterfall([
       (callback) => {
         if (this._hasRefreshToken()) return callback()
-        if (this.options.code) {
-          this.token(this.options.code)
-              .then((data) => callback(), (error) => callback(error))
+        if (this.options.authCode) {
+          this.token(this.options.authCode)
+            .then((data) => callback(), (error) => callback(error))
           return
+        } else {
+          const query = {
+            response_type: 'code',
+            client_id: this.options.clientId,
+            scope: this.options.scope,
+            redirect_uri: this.options.redirectUri,
+            state: 'init'
+          }
+
+          console.log('Open in webbrowser to receive your NIBE Uplink Auth-Code:')
+          console.log('')
+          console.log(this.options.baseUrl + '/oauth/authorize?' + querystring.stringify(query))
+          console.log('')
+          console.log('Afterwards make sure to provide the NIBE Uplink Auth-Code as environment property NIBE_AUTH_CODE and restart the process.')
+          this.stop()
         }
-        this.auth()
-          .then((code) => {
-            this.token(code)
-              .then((data) => callback(), (error) => callback(error))
-          })
       },
       (callback) => {
         if (!this._isTokenExpired()) return callback()
@@ -140,6 +292,7 @@ class Fetcher extends EventEmitter {
       if (error) {
         this._onError(error)
       }
+
       callback()
     })
   }
@@ -167,28 +320,7 @@ class Fetcher extends EventEmitter {
   }
 
   clear () {
-    this.config.clear()
-  }
-
-  auth () {
-    const query = {
-      response_type: 'code',
-      client_id: this.options.clientId,
-      scope: this.options.scope,
-      redirect_uri: this.options.redirectUri,
-      state: 'init'
-    }
-
-    console.log('Open in webbrowser:', this.options.baseUrl + '/oauth/authorize?' + querystring.stringify(query))
-
-    return new Promise((resolve, reject) => {
-      prompt.start()
-      prompt.get(['code'], (error, result) => {
-        if (error) return reject(error)
-        prompt.stop()
-        return resolve(result.code)
-      })
-    })
+    this.setSesssion({})
   }
 
   token (code) {
@@ -212,7 +344,8 @@ class Fetcher extends EventEmitter {
         if (error) return reject(error)
         if (this._isError(response)) return reject(new Error(response.statusCode + ': ' + response.statusMessage))
         payload.expires_at = Date.now() + (payload.expires_in * 1000)
-        this.config.set(payload)
+        this.setSesssion(payload)
+        this.setSesssion(payload)
         return resolve(payload)
       })
     })
@@ -221,7 +354,7 @@ class Fetcher extends EventEmitter {
   refreshToken () {
     const data = {
       grant_type: 'refresh_token',
-      refresh_token: this.config.get('refresh_token'),
+      refresh_token: this.getSession('refresh_token'),
       client_id: this.options.clientId,
       client_secret: this.options.clientSecret
     }
@@ -248,7 +381,7 @@ class Fetcher extends EventEmitter {
     return new Promise((resolve, reject) => {
       this.wreck.get(`/api/v1/systems/${systemId}/serviceinfo/categories`, {
         headers: {
-          Authorization: 'Bearer ' + this.config.get('access_token')
+          Authorization: 'Bearer ' + this.getSession('access_token')
         },
         json: true
       }, (error, response, payload) => {
@@ -265,7 +398,7 @@ class Fetcher extends EventEmitter {
     return new Promise((resolve, reject) => {
       this.wreck.get(`/api/v1/systems/${systemId}/serviceinfo/categories/status?categoryId=${category}`, {
         headers: {
-          Authorization: 'Bearer ' + this.config.get('access_token')
+          Authorization: 'Bearer ' + this.getSession('access_token')
         },
         json: true
       }, (error, response, payload) => {
@@ -283,8 +416,13 @@ class Fetcher extends EventEmitter {
         this.fetchParams(item.categoryId).then((result) => {
           result.forEach((i) => {
             const name = i.parameterId || (item.categoryId + '_' + i.title.split(/[^a-z]+/gi).join('_')).toLowerCase().replace(/[_]+$/, '')
-            i.key = this.options.parameters[name] || name
-            i.categoryId = item.categoryId
+            const parameters = this.options.parameters[name]
+            Object.assign(i, {
+              key: name,
+              categoryId: item.categoryId
+            }, parameters)
+
+            if (i.divideBy > 0) i.value = i.rawValue / i.divideBy
           })
           reply(null, result)
         }, (error) => {
@@ -299,12 +437,28 @@ class Fetcher extends EventEmitter {
     })
   }
 
+  readSession () {
+    if (!this.options.sessionStore || !fs.existsSync(this.options.sessionStore)) return
+    this._auth = jsonfile.readFileSync(this.options.sessionStore, { throws: false })
+  }
+
+  getSession (key) {
+    if (this._auth == null) this.readSession()
+    return this._auth ? this._auth[key] : null
+  }
+
+  setSesssion (auth) {
+    this._auth = auth
+    if (!this.options.sessionStore) return
+    jsonfile.writeFileSync(this.options.sessionStore, this._auth)
+  }
+
   _isTokenExpired () {
-    return (this.config.get('expires_at') || 0) < (Date.now() + this.renewBeforeExpiry)
+    return (this.getSession('expires_at') || 0) < (Date.now() + this.renewBeforeExpiry)
   }
 
   _hasRefreshToken () {
-    return !!this.config.get('refresh_token')
+    return !!this.getSession('refresh_token')
   }
 
   _onData (data) {
@@ -318,7 +472,7 @@ class Fetcher extends EventEmitter {
   _isError (response) {
     if (response.statusCode !== 200) {
       console.error('Error occurred: ' + response.statusCode + ': ' + response.statusMessage)
-      this.clear()
+      if (response.statusCode === 401) this.clear()
       return true
     }
 
